@@ -9,7 +9,7 @@ Some code in Ryu library needs to be changed. See https://github.com/muzixing/ry
 ## Run
 
 ```
-$ ryu run ryu.app.network_awareness.shortest_forwarding ryu.app.network_awareness.statistics_server ryu.app.ofctl_rest --observe-links --k-paths=5 --weight=all
+$ ryu run ryu.app.network_awareness.shortest_forwarding ryu.app.network_awareness.restful_server ryu.app.ofctl_rest --observe-links --k-paths=5 --weight=all
 ```
 
 ## Contributors
