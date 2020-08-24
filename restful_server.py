@@ -2,8 +2,6 @@ from ryu.app.wsgi import ControllerBase, WSGIApplication, Response, Request, rou
 from ryu.base import app_manager
 import json
 import networkx
-import simplejson
-
 
 def bad_request_response(e: Exception):
     body = json.dumps({
@@ -12,11 +10,13 @@ def bad_request_response(e: Exception):
     })
     return Response(content_type='application/json', body=body, status=400)
 
+
 def success_response():
     body = json.dumps({
         'success': True
     })
     return Response(content_type='application/json', body=body)
+
 
 class NetworkAwarenessRestfulAPI(app_manager.RyuApp):
     _CONTEXTS = {
@@ -58,8 +58,54 @@ class NetworkAwarenessRestfulController(ControllerBase):
 
     @route(app_name, '/awareness/stats', methods=['GET'])
     def get_stats(self, req, **kwargs):
+        graph = []
+
+        for edge in networkx.convert.to_edgelist(self.awareness.graph):
+            src, dst, metrics = edge
+            if src >= dst:
+                continue
+                
+            src_port, dst_port = self.awareness.link_to_port.get((src, dst), (-1, -1))
+            graph.append(dict(src=src, dst=dst, metrics=metrics, src_port=src_port, dst_port=dst_port))
+
         body = json.dumps({
-            'graph': list(map(lambda x: dict(src=x[0], dst=x[1], **x[2]), networkx.convert.to_edgelist(self.awareness.graph)))
+            'graph': graph
+        })
+        return Response(content_type='application/json', body=body)
+
+    @route(app_name, '/awareness/links', methods=['GET'])
+    def get_links(self, req, **kwargs):
+        body = json.dumps({
+            'links':  list(
+                filter(
+                    lambda link: link['src'] <= link['dst'], 
+                    map(
+                        lambda item: 
+                            {'src': item[0][0], 'dst': item[0][1], 'src_port': item[1][0], 'dst_port': item[1][1]}, 
+                        self.awareness.link_to_port.items()
+                    )
+                )
+            )
+        })
+        return Response(content_type='application/json', body=body)
+    
+    @route(app_name, '/awareness/flows', methods=['GET'])
+    def get_flows(self, req, **kwargs):
+        body = json.dumps({
+            'flows': self.monitor.flows
+        })
+        return Response(content_type='application/json', body=body)
+    
+    @route(app_name, '/awareness/active_paths', methods=['GET'])
+    def get_paths(self, req, **kwargs):
+        paths_dict = self.shortest_forwarding.active_paths
+        paths = []
+        for src in paths_dict:
+            for dst in paths_dict[src]:
+                path, timestamp = paths_dict[src][dst]
+                paths.append({'src': src, 'dst': dst, 'timestamp': timestamp, 'path': path})
+        body = json.dumps({
+            'paths': paths
         })
         return Response(content_type='application/json', body=body)
 
@@ -78,38 +124,52 @@ class NetworkAwarenessRestfulController(ControllerBase):
         })
         return Response(content_type='application/json', body=body)
 
-    @route(app_name, '/awareness/weights/switches', methods=['POST'])
+    @route(app_name, '/awareness/weights/switches', methods=['POST', 'PUT', 'PATCH'])
     def set_switch_weights(self, req, **kwargs):
         try:
             switches = req.json.get('switches')
             assert type(switches) == dict
             for (k, v) in switches.items():
-                assert type(k) == str
-                assert type(v) == float or type(v) == int
+                assert type(k) is str
+                assert type(v) is float or type(v) is int
 
             switches = {int(k): v for (k, v) in switches.items()}
-            print(switches)
-            self.shortest_forwarding.switch_weights = switches
+
+            if req.method in ('POST', 'PUT'):
+                self.shortest_forwarding.switch_weights = switches
+            elif req.method == 'PATCH':
+                self.shortest_forwarding.switch_weights.update(switches)
+            else:
+                assert False
+
         except (AssertionError, KeyError, simplejson.errors.JSONDecodeError) as e:
             return bad_request_response(e)
         return success_response()
 
-    @route(app_name, '/awareness/weights/default_metric', methods=['GET'])
+    @route(app_name, '/awareness/weights/default_metrics', methods=['GET'])
     def get_default_metric_weights(self, req, **kwargs):
         body = json.dumps({
-            'default_metric': self.shortest_forwarding.default_metric_weights
+            'default_metrics': self.shortest_forwarding.default_metric_weights
         })
         return Response(content_type='application/json', body=body)
 
-    @route(app_name, '/awareness/weights/default_metric', methods=['POST'])
+    @route(app_name, '/awareness/weights/default_metrics', methods=['POST', 'PUT', 'PATCH'])
     def set_default_metric_weights(self, req, **kwargs):
         try:
-            default_metric = req.json.get('default_metric')
+            default_metric = req.json.get('default_metrics')
             assert type(default_metric) == dict
             for (k, v) in default_metric.items():
-                assert type(k) == str
-                assert type(v) == float or type(v) == int
-            self.shortest_forwarding.default_metric_weights = default_metric
+                assert type(k) is str
+                assert type(v) is float or type(v) is int
+
+            if req.method in ('POST', 'PUT'):
+                self.shortest_forwarding.default_metric_weights = default_metric
+            elif req.method == 'PATCH':
+                self.shortest_forwarding.default_metric_weights.update(
+                    default_metric)
+            else:
+                assert False
+
         except Exception as e:
             return bad_request_response(e)
         return success_response()
@@ -121,13 +181,13 @@ class NetworkAwarenessRestfulController(ControllerBase):
         })
         return Response(content_type='application/json', body=body)
 
-    @route(app_name, '/awareness/services', methods=['POST'])
+    @route(app_name, '/awareness/services', methods=['POST', 'PUT', 'PATCH'])
     def set_services(self, req, **kwargs):
         try:
             services = req.json.get('services')
             assert type(services) is list
 
-            self.shortest_forwarding.services.clear()
+            services_dict = {}
 
             for service in services:
                 id = service['id']
@@ -141,11 +201,20 @@ class NetworkAwarenessRestfulController(ControllerBase):
                 for (k, v) in weights.items():
                     assert type(k) is str
                     assert type(v) is float or type(v) is int
+
                 enabled = service.get('enabled', True)
+
                 assert type(enabled) is bool
-                self.shortest_forwarding.services.append(
-                    dict(id=id, src=src, dst=dst, weights=weights, enabled=enabled))
-                
+                services_dict[id] = dict(
+                    id=id, src=src, dst=dst, weights=weights, enabled=enabled)
+
+            if req.method in ('POST', 'PUT'):
+                self.shortest_forwarding.services = services_dict
+            elif req.method == 'PATCH':
+                self.shortest_forwarding.services.update(services_dict)
+            else:
+                assert False
+
         except Exception as e:
             return bad_request_response(e)
         return success_response()

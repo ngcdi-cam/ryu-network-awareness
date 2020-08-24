@@ -67,6 +67,8 @@ class NetworkMonitor(app_manager.RyuApp):
         self.monitor_thread = hub.spawn(self._monitor)
         self.save_freebandwidth_thread = hub.spawn(self._save_bw_graph)
 
+        self.flows = []
+
     @set_ev_cls(ofp_event.EventOFPStateChange,
                 [MAIN_DISPATCHER, DEAD_DISPATCHER])
     def _state_change_handler(self, ev):
@@ -410,7 +412,9 @@ class NetworkMonitor(app_manager.RyuApp):
             return
 
         bodys = self.stats[type]
+        
         if(type == 'flow'):
+            self.flows.clear()
             print('datapath         ''   in-port        ip-dst      '
                   'out-port packets  bytes  flow-speed(B/s)')
             print('---------------- ''  -------- ----------------- '
@@ -429,6 +433,14 @@ class NetworkMonitor(app_manager.RyuApp):
                             (stat.match.get('in_port'),
                             stat.match.get('ipv4_dst'),
                             stat.instructions[0].actions[0].port)][-1]))))
+                    self.flows.append({
+                        'dpid': dpid,
+                        'in_port': stat.match['in_port'],
+                        'ip_dst':  stat.match.get('ipv4_dst'),
+                        'out_port': stat.instructions[0].actions[0].port,
+                        'packets': stat.packet_count,
+                        'bytes': stat.byte_count
+                    })
             print('\n')
 
         if(type == 'port'):
