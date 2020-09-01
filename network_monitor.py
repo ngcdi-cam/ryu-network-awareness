@@ -342,7 +342,7 @@ class NetworkMonitor(app_manager.RyuApp):
 
         config_dict = {ofproto.OFPPC_PORT_DOWN: "Down",
                        ofproto.OFPPC_NO_RECV: "No Recv",
-                       ofproto.OFPPC_NO_FWD: "No Farward",
+                       ofproto.OFPPC_NO_FWD: "No Forward",
                        ofproto.OFPPC_NO_PACKET_IN: "No Packet-in"}
 
         state_dict = {ofproto.OFPPS_LINK_DOWN: "Down",
@@ -437,6 +437,7 @@ class NetworkMonitor(app_manager.RyuApp):
                         'dpid': dpid,
                         'in_port': stat.match['in_port'],
                         'ip_dst':  stat.match.get('ipv4_dst'),
+                        'ip_src':  stat.match.get('ipv4_src'),
                         'out_port': stat.instructions[0].actions[0].port,
                         'packets': stat.packet_count,
                         'bytes': stat.byte_count

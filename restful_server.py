@@ -72,6 +72,46 @@ class NetworkAwarenessRestfulController(ControllerBase):
             'graph': graph
         })
         return Response(content_type='application/json', body=body)
+    
+    @route(app_name, '/awareness/stats/{src}/{dst}', methods=['GET'])
+    def get_stats_specific_src_dst(self, req, src, dst, **kwargs):
+        try:
+            src = int(src)
+            dst = int(dst)
+            metrics = self.awareness.graph[src][dst]
+            src_port, dst_port = self.awareness.link_to_port.get((src, dst), (-1, -1))
+            body = json.dumps({
+                'src': src,
+                'dst': dst,
+                'src_port': src_port,
+                'dst_port': dst_port,
+                'metrics': metrics
+            })
+            return Response(content_type='application/json', body=body)
+        except Exception as e:
+            return bad_request_response(e)
+    
+    @route(app_name, '/awareness/stats/{src}', methods=['GET'])
+    def get_stats_specific_src(self, req, src, **kwargs):
+        try:
+            filter = 'filter' in req.params # filter links where dst > src
+            src = int(src)
+            links = []
+            for dst, metrics in self.awareness.graph[src].items():
+                if filter and src >= dst:
+                    continue
+                src_port, dst_port = self.awareness.link_to_port.get((src, dst), (-1, -1))
+                links.append({
+                    'src': src,
+                    'dst': dst,
+                    'src_port': src_port,
+                    'dst_port': dst_port,
+                    'metrics': metrics
+                })
+            body = json.dumps({ 'graph': links })
+            return Response(content_type='application/json', body=body)
+        except Exception as e:
+            return bad_request_response(e)
 
     @route(app_name, '/awareness/links', methods=['GET'])
     def get_links(self, req, **kwargs):
@@ -142,7 +182,7 @@ class NetworkAwarenessRestfulController(ControllerBase):
             else:
                 assert False
 
-        except (AssertionError, KeyError, simplejson.errors.JSONDecodeError) as e:
+        except (AssertionError, KeyError, json.JSONDecodeError) as e:
             return bad_request_response(e)
         return success_response()
 
