@@ -171,8 +171,7 @@ class NetworkMonitor(app_manager.RyuApp):
                 max_bw_of_paths = 0
                 best_path = paths[src][dst][0]
                 for path in paths[src][dst]:
-                    min_bw = setting.MAX_CAPACITY
-                    min_bw = self.get_min_bw_of_links(graph, path, min_bw)
+                    min_bw = self.get_min_bw_of_links(graph, path)
                     if min_bw > max_bw_of_paths:
                         max_bw_of_paths = min_bw
                         best_path = path

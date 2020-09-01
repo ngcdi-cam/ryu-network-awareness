@@ -55,6 +55,13 @@ class NetworkAwarenessRestfulController(ControllerBase):
             'throughput': self.monitor.bandwidth_stats_pretty
         })
         return Response(content_type='application/json', body=body)
+    
+    @route(app_name, '/awareness/stats/raw_monitor', methods=['GET'])
+    def get_raw_monitor(self, req, **kwargs):
+        body = json.dumps({
+            'throughput': self.monitor.stats
+        })
+        return Response(content_type='application/json', body=body)
 
     @route(app_name, '/awareness/stats', methods=['GET'])
     def get_stats(self, req, **kwargs):
@@ -133,6 +140,13 @@ class NetworkAwarenessRestfulController(ControllerBase):
     def get_flows(self, req, **kwargs):
         body = json.dumps({
             'flows': self.monitor.flows
+        })
+        return Response(content_type='application/json', body=body)
+    
+    @route(app_name, '/awareness/flows/{dpid}', methods=['GET'])
+    def get_flows_specific_dpid(self, req, dpid, **kwargs):
+        body = json.dumps({
+            'flows': filter(lambda x: x.dpid == dpid, self.monitor.flows)
         })
         return Response(content_type='application/json', body=body)
     
@@ -233,9 +247,9 @@ class NetworkAwarenessRestfulController(ControllerBase):
                 id = service['id']
                 assert type(id) is int
                 src = service['src']
-                assert type(src) is int
+                assert type(src) is str
                 dst = service['dst']
-                assert type(dst) is int
+                assert type(dst) is str
                 weights = service.get('weights', {})
                 assert type(weights) is dict
                 for (k, v) in weights.items():
