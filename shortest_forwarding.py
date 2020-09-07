@@ -265,7 +265,7 @@ class ShortestForwarding(app_manager.RyuApp):
     def map_hop_to_score(self, hop):
         return math.exp(-0.2 * hop)
 
-    def get_path_score(self, graph, path: list, metric_weights: dict, switch_weights: dict, enabled_metrics: list):
+    def get_path_score(self, graph, src_ip, dst_ip, path: list, metric_weights: dict, switch_weights: dict, enabled_metrics: list):
         logging.info(
             'get_path_score(): metric_weights = {}'.format(metric_weights))
         logging.info(
@@ -273,13 +273,14 @@ class ShortestForwarding(app_manager.RyuApp):
 
         metric_raw_functions = {
             'free_bandwidth': self.monitor.get_min_bw_of_links,
+            'free_bandwidth_improved': lambda graph, path: self.monitor.get_min_bw_of_links(graph, path, (src_ip, dst_ip)),
             'delay': lambda graph, path: self.get_path_metric_sum(graph, path, 'delay'),
             'hop': lambda graph, path: self.get_path_metric_sum(graph, path, 'weight')
         }
 
         metric_score_functions = {
-            'free_bandwidth_raw': self.monitor.map_bw_to_score,
             'free_bandwidth': self.monitor.map_bw_to_score,
+            'free_bandwidth_improved': self.monitor.map_bw_to_score,
             'delay': self.delay_detector.map_delay_to_score,
             'hop': self.map_hop_to_score
         }
@@ -366,7 +367,7 @@ class ShortestForwarding(app_manager.RyuApp):
 
             try:
                 shortest_paths[src][dst][0]
-            except KeyError as e:
+            except:
                 paths = self.awareness.k_shortest_paths(graph, src, dst,
                                                         weight='weight', k=CONF.k_paths)
 
@@ -382,7 +383,7 @@ class ShortestForwarding(app_manager.RyuApp):
             for path in local_shortest_paths:
                 logging.info('PATH: {}'.format(path))
                 score = self.get_path_score(
-                    graph, path, weights, self.switch_weights, self.enabled_metrics)
+                    graph, src_ip, dst_ip, path, weights, self.switch_weights, self.enabled_metrics)
                 if score > best_path_score:
                     best_path_score = score
                     best_path = path

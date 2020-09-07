@@ -37,7 +37,6 @@ CONF = cfg.CONF
 class NetworkMonitor(app_manager.RyuApp):
     """
         NetworkMonitor is a Ryu app for collecting traffic information.
-
     """
     OFP_VERSIONS = [ofproto_v1_3.OFP_VERSION]
 
@@ -49,7 +48,8 @@ class NetworkMonitor(app_manager.RyuApp):
         self.port_speed = {}
         self.flow_stats = {}
         self.flow_speed = {}
-        self.stats = {}
+        self.stats = {'flow': {}, 'port': {}}
+        self.last_flows = {}
         self.bandwidth_stats_pretty = []
         self.port_features = {}
         self.free_bandwidth = {}
@@ -59,9 +59,10 @@ class NetworkMonitor(app_manager.RyuApp):
         self.best_paths = None
 
         if setting.BANDWIDTH_SOURCE == "mininet":
-            self.mininet_rest_client = mininet_rest_client.MininetRestClient(base_url = setting.MININET_REST_BASE_URL)
+            self.mininet_rest_client = mininet_rest_client.MininetRestClient(
+                base_url=setting.MININET_REST_BASE_URL)
             self.mininet_link_bandwidths = {}
-        
+
         # Start to green thread to monitor traffic and calculating
         # free bandwidth of links respectively.
         self.monitor_thread = hub.spawn(self._monitor)
@@ -90,9 +91,9 @@ class NetworkMonitor(app_manager.RyuApp):
             Main entry method of monitoring traffic.
         """
         while CONF.weight == 'bw' or CONF.weight == 'all':
-            self.stats['flow'] = {}
-            self.stats['port'] = {}
-            
+            #self.stats['flow'] = {}
+            #self.stats['port'] = {}
+
             if setting.BANDWIDTH_SOURCE == "mininet":
                 self.mininet_link_bandwidths = self.mininet_rest_client.get_link_bandwidths()
 
@@ -134,10 +135,11 @@ class NetworkMonitor(app_manager.RyuApp):
         req = parser.OFPFlowStatsRequest(datapath)
         datapath.send_msg(req)
 
-    def get_min_bw_of_links(self, graph, path, min_bw = setting.MAX_CAPACITY):
+    def get_min_bw_of_links(self, graph, path, exclusion=None, min_bw=setting.MAX_CAPACITY):
         """
             Get the free bandwidth of the path specified
         """
+
         _len = len(path)
         if _len > 1:
             minimal_band_width = min_bw
@@ -145,12 +147,46 @@ class NetworkMonitor(app_manager.RyuApp):
                 pre, curr = path[i], path[i+1]
                 if 'free_bandwidth' in graph[pre][curr]:
                     bw = graph[pre][curr]['free_bandwidth']
+
+                    self.logger.info('get_min_bw_of_links(): Raw free bw = {}'.format(bw))
+                    # self.logger.info('get_min_bw_of_links(): last_flows = {}'.format(self.last_flows))
+                    if exclusion is not None and curr in self.last_flows:
+                        src_ip, dst_ip = exclusion
+                        _, curr_port = self.awareness.link_to_port[(pre, curr)]
+
+                        self.logger.info('get_min_bw_of_links(): src_ip = {}, dst_ip = {}, curr_port = {}'.format(src_ip, dst_ip, curr_port))
+
+                        for flow in self.last_flows[curr]:
+                            self.logger.info(
+                                'get_min_bw_of_links(): flow info: {}'.format(flow.match))
+
+                            
+                            if flow.match.get('in_port') != curr_port or flow.match.get('ipv4_src') != src_ip or flow.match.get('ipv4_dst') != dst_ip:
+                                continue
+
+                            flow_speed_history = self.flow_speed[curr][
+                                (flow.match.get('in_port'),
+                                 flow.match.get('ipv4_dst'),
+                                 flow.instructions[0].actions[0].port)]
+                            
+                            if len(flow_speed_history) < 2:
+                                self.logger.info('get_min_bw_of_links(): No enough speed history entries')
+                                continue
+                            
+                            flow_speed = abs(flow_speed_history[-2]) * 8 / 10 ** 3
+                            self.logger.info(
+                                'get_min_bw_of_links(): Found matching flow, speed = {}'.format(flow_speed))
+                            bw += flow_speed
+                            break
+
+                    self.logger.info('get_min_bw_of_links(): Free bw = {}'.format(bw))
+
                     minimal_band_width = min(bw, minimal_band_width)
                 else:
                     continue
             return minimal_band_width
         return min_bw
-    
+
     def map_bw_to_score(self, bw: float):
         return bw / 1000.0
 
@@ -201,7 +237,7 @@ class NetworkMonitor(app_manager.RyuApp):
                     graph[src_dpid][dst_dpid]['free_bandwidth'] = free_bw
                 else:
                     graph[src_dpid][dst_dpid]['free_bandwidth'] = 0
-                
+
                 if src_dpid in self.port_features and src_port in self.port_features[src_dpid] \
                         and dst_dpid in self.port_features and dst_port in self.port_features[dst_dpid]:
                     bw_src = self.port_features[src_dpid][src_port][2]
@@ -210,10 +246,12 @@ class NetworkMonitor(app_manager.RyuApp):
                     graph[src_dpid][dst_dpid]['bandwidth'] = bandwidth
                 else:
                     graph[src_dpid][dst_dpid]['bandwidth'] = 0
-                
+
                 if (src_dpid, src_port) in self.port_speed and (dst_dpid, dst_port) in self.port_speed:
-                    throughput_src = self.port_speed[(src_dpid, src_port)][-1] * 8 / 10 ** 3
-                    throughput_dst = self.port_speed[(dst_dpid, dst_port)][-1] * 8 / 10 ** 3
+                    throughput_src = self.port_speed[(
+                        src_dpid, src_port)][-1] * 8 / 10 ** 3
+                    throughput_dst = self.port_speed[(
+                        dst_dpid, dst_port)][-1] * 8 / 10 ** 3
                     throughput = min(throughput_src, throughput_dst)
                     graph[src_dpid][dst_dpid]['throughput'] = throughput
                 else:
@@ -268,6 +306,9 @@ class NetworkMonitor(app_manager.RyuApp):
         """
         body = ev.msg.body
         dpid = ev.msg.datapath.id
+        # self.logger.info('_flow_stats_reply_handler(): flows = {}'.format(self.stats['flow'].get(dpid)))
+        if dpid in self.stats['flow']: 
+            self.last_flows[dpid] = copy.deepcopy(self.stats['flow'][dpid])
         self.stats['flow'][dpid] = body
         self.flow_stats.setdefault(dpid, {})
         self.flow_speed.setdefault(dpid, {})
@@ -369,17 +410,17 @@ class NetworkMonitor(app_manager.RyuApp):
                 state = state_dict[p.state]
             else:
                 state = "up"
-            
 
             if setting.BANDWIDTH_SOURCE == "mininet":
-                speed = self.mininet_link_bandwidths.get(p.name.decode('ascii'), p.curr_speed)
+                speed = self.mininet_link_bandwidths.get(
+                    p.name.decode('ascii'), p.curr_speed)
             else:
                 speed = p.curr_speed
-            
+
             port_feature = (config, state, speed)
             self.port_features[dpid][p.port_no] = port_feature
         #self.logger.info("----------------- ports -----------------")
-        #self.logger.info("\n".join(ports))
+        # self.logger.info("\n".join(ports))
 
     @set_ev_cls(ofp_event.EventOFPPortStatus, MAIN_DISPATCHER)
     def _port_status_handler(self, ev):
@@ -398,7 +439,8 @@ class NetworkMonitor(app_manager.RyuApp):
 
         if reason in reason_dict:
 
-            print("switch%d: port %s %s" % (dpid, reason_dict[reason], port_no))
+            print("switch%d: port %s %s" %
+                  (dpid, reason_dict[reason], port_no))
         else:
             print("switch%d: Illeagal port state %s %s" % (port_no, reason))
 
@@ -411,7 +453,7 @@ class NetworkMonitor(app_manager.RyuApp):
             return
 
         bodys = self.stats[type]
-        
+
         if(type == 'flow'):
             self.flows.clear()
             print('datapath         ''   in-port        ip-dst      '
@@ -430,8 +472,9 @@ class NetworkMonitor(app_manager.RyuApp):
                         stat.packet_count, stat.byte_count,
                         abs(self.flow_speed[dpid][
                             (stat.match.get('in_port'),
-                            stat.match.get('ipv4_dst'),
-                            stat.instructions[0].actions[0].port)][-1]))))
+                             stat.match.get('ipv4_dst'),
+                             stat.instructions[0].actions[0].port)][-1]))))
+                    
                     self.flows.append({
                         'dpid': dpid,
                         'in_port': stat.match['in_port'],

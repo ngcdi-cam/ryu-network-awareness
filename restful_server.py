@@ -2,8 +2,12 @@ from ryu.app.wsgi import ControllerBase, WSGIApplication, Response, Request, rou
 from ryu.base import app_manager
 import json
 import networkx
+import traceback
+
 
 def bad_request_response(e: Exception):
+    print("Bad request: " + str(e))
+    traceback.print_exc()
     body = json.dumps({
         'error': True,
         'msg': repr(e)
@@ -55,12 +59,12 @@ class NetworkAwarenessRestfulController(ControllerBase):
             'throughput': self.monitor.bandwidth_stats_pretty
         })
         return Response(content_type='application/json', body=body)
-    
+
     @route(app_name, '/awareness/stats/raw_monitor', methods=['GET'])
     def get_raw_monitor(self, req, **kwargs):
         body = json.dumps({
             'throughput': self.monitor.stats
-        })
+        }, default=lambda o: '<not serializable>')
         return Response(content_type='application/json', body=body)
 
     @route(app_name, '/awareness/stats', methods=['GET'])
@@ -71,22 +75,25 @@ class NetworkAwarenessRestfulController(ControllerBase):
             src, dst, metrics = edge
             if src >= dst:
                 continue
-                
-            src_port, dst_port = self.awareness.link_to_port.get((src, dst), (-1, -1))
-            graph.append(dict(src=src, dst=dst, metrics=metrics, src_port=src_port, dst_port=dst_port))
+
+            src_port, dst_port = self.awareness.link_to_port.get(
+                (src, dst), (-1, -1))
+            graph.append(dict(src=src, dst=dst, metrics=metrics,
+                              src_port=src_port, dst_port=dst_port))
 
         body = json.dumps({
             'graph': graph
         })
         return Response(content_type='application/json', body=body)
-    
+
     @route(app_name, '/awareness/stats/{src}/{dst}', methods=['GET'])
     def get_stats_specific_src_dst(self, req, src, dst, **kwargs):
         try:
             src = int(src)
             dst = int(dst)
             metrics = self.awareness.graph[src][dst]
-            src_port, dst_port = self.awareness.link_to_port.get((src, dst), (-1, -1))
+            src_port, dst_port = self.awareness.link_to_port.get(
+                (src, dst), (-1, -1))
             body = json.dumps({
                 'src': src,
                 'dst': dst,
@@ -97,17 +104,18 @@ class NetworkAwarenessRestfulController(ControllerBase):
             return Response(content_type='application/json', body=body)
         except Exception as e:
             return bad_request_response(e)
-    
+
     @route(app_name, '/awareness/stats/{src}', methods=['GET'])
     def get_stats_specific_src(self, req, src, **kwargs):
         try:
-            filter = 'filter' in req.params # filter links where dst > src
+            filter = 'filter' in req.params  # filter links where dst > src
             src = int(src)
             links = []
             for dst, metrics in self.awareness.graph[src].items():
-                if filter and src >= dst:
+                if filter and src > dst:
                     continue
-                src_port, dst_port = self.awareness.link_to_port.get((src, dst), (-1, -1))
+                src_port, dst_port = self.awareness.link_to_port.get(
+                    (src, dst), (-1, -1))
                 links.append({
                     'src': src,
                     'dst': dst,
@@ -115,7 +123,7 @@ class NetworkAwarenessRestfulController(ControllerBase):
                     'dst_port': dst_port,
                     'metrics': metrics
                 })
-            body = json.dumps({ 'graph': links })
+            body = json.dumps({'graph': links})
             return Response(content_type='application/json', body=body)
         except Exception as e:
             return bad_request_response(e)
@@ -125,31 +133,91 @@ class NetworkAwarenessRestfulController(ControllerBase):
         body = json.dumps({
             'links':  list(
                 filter(
-                    lambda link: link['src'] <= link['dst'], 
+                    lambda link: link['src'] <= link['dst'],
                     map(
-                        lambda item: 
-                            {'src': item[0][0], 'dst': item[0][1], 'src_port': item[1][0], 'dst_port': item[1][1]}, 
+                        lambda item:
+                            {'src': item[0][0], 'dst': item[0][1],
+                                'src_port': item[1][0], 'dst_port': item[1][1]},
                         self.awareness.link_to_port.items()
                     )
                 )
             )
         })
         return Response(content_type='application/json', body=body)
-    
-    @route(app_name, '/awareness/flows', methods=['GET'])
+
+    @route(app_name, '/awareness/access_table', methods=['GET'])
+    def get_access_table(self, req, **kwargs):
+        access_table = list(
+            map(
+                lambda x: {'host_ip': x[1][0], 'host_mac': x[1][1], 'dpid': x[0][0], 'port': x[0][1]},
+                self.awareness.access_table.items()
+            )
+        )
+        access_table_filtered = []
+        ip_visited = set()
+        for t in access_table:
+            if t['host_ip'] not in ip_visited:
+                access_table_filtered.append(t)
+                ip_visited.add(t['host_ip'])
+        
+        body = json.dumps({
+            'access_table': access_table_filtered
+        })
+        return Response(content_type='application/json', body=body)
+
+    @route(app_name, '/awareness/flows_raw', methods=['GET'])
     def get_flows(self, req, **kwargs):
         body = json.dumps({
             'flows': self.monitor.flows
         })
         return Response(content_type='application/json', body=body)
-    
+
     @route(app_name, '/awareness/flows/{dpid}', methods=['GET'])
     def get_flows_specific_dpid(self, req, dpid, **kwargs):
+        filter = 'filter' in req.params
+        dpid = int(dpid)
+        flows_raw = self.monitor.stats['flow'].get(dpid)
+        flows = []
+
+        if flows_raw:
+            for flow in flows_raw:
+                if flow.priority != 1:
+                    continue
+
+                match = flow.match
+
+                in_port = match.get('in_port')
+                out_port = flow.instructions[0].actions[0].port
+
+                src_ip = match.get('ipv4_src')
+                dst_ip = match.get('ipv4_dst')
+
+                throughput = abs(self.monitor.flow_speed[dpid][
+                    (in_port,
+                     match.get('ipv4_dst'),
+                     out_port)][-1]) * 8 / 10 ** 3
+
+                for (src_dpid, dst_dpid), (src_port, dst_port) in self.awareness.link_to_port.items():
+                    if (src_dpid == dpid and out_port == src_port) or (dst_dpid == dpid and in_port == dst_port):
+                        if filter and src_dpid > dst_dpid:
+                            continue
+
+                        flows.append({
+                            'src_ip_dpid': self.awareness.get_host_location(src_ip)[0],
+                            'dst_ip_dpid': self.awareness.get_host_location(dst_ip)[0],
+                            'src_port': src_port,
+                            'dst_port': dst_port,
+                            'src': src_dpid,
+                            'dst': dst_dpid,
+                            'dst_ip': dst_ip,
+                            'src_ip': src_ip,
+                            'throughput': throughput
+                        })
         body = json.dumps({
-            'flows': filter(lambda x: x.dpid == dpid, self.monitor.flows)
+            'flows': flows
         })
         return Response(content_type='application/json', body=body)
-    
+
     @route(app_name, '/awareness/active_paths', methods=['GET'])
     def get_paths(self, req, **kwargs):
         paths_dict = self.shortest_forwarding.active_paths
@@ -157,7 +225,8 @@ class NetworkAwarenessRestfulController(ControllerBase):
         for src in paths_dict:
             for dst in paths_dict[src]:
                 path, timestamp = paths_dict[src][dst]
-                paths.append({'src': src, 'dst': dst, 'timestamp': timestamp, 'path': path})
+                paths.append(
+                    {'src': src, 'dst': dst, 'timestamp': timestamp, 'path': path})
         body = json.dumps({
             'paths': paths
         })
@@ -263,6 +332,7 @@ class NetworkAwarenessRestfulController(ControllerBase):
                     id=id, src=src, dst=dst, weights=weights, enabled=enabled)
 
             if req.method in ('POST', 'PUT'):
+                print("service_dict is " + services_dict)
                 self.shortest_forwarding.services = services_dict
             elif req.method == 'PATCH':
                 self.shortest_forwarding.services.update(services_dict)
