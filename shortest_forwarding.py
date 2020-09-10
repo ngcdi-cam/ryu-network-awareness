@@ -21,6 +21,7 @@ import functools
 import time
 import math
 import networkx as nx
+from typing import Dict, List
 from operator import attrgetter
 from ryu import cfg
 from ryu.base import app_manager
@@ -265,7 +266,7 @@ class ShortestForwarding(app_manager.RyuApp):
     def map_hop_to_score(self, hop):
         return math.exp(-0.2 * hop)
 
-    def get_path_score(self, graph, src_ip, dst_ip, path: list, metric_weights: dict, switch_weights: dict, enabled_metrics: list):
+    def get_path_score(self, graph, src_ip, dst_ip, path: list, metric_weights: Dict[str, float], switch_weights: Dict[str, int], enabled_metrics: List[str]):
         logging.info(
             'get_path_score(): metric_weights = {}'.format(metric_weights))
         logging.info(
@@ -293,6 +294,8 @@ class ShortestForwarding(app_manager.RyuApp):
 
         total_score = 0.0
 
+        metric_raw_values = {}
+
         for metric in enabled_metrics:
             try:
                 if metric not in metric_weights:
@@ -306,6 +309,7 @@ class ShortestForwarding(app_manager.RyuApp):
                 fn_raw = metric_raw_functions[metric]
                 fn_score = metric_score_functions[metric]
                 raw_value = fn_raw(graph, path)
+                metric_raw_values[metric] = raw_value
                 score_unweighted = fn_score(raw_value)
                 score_weighted = score_unweighted * weight
                 self.logger.info('get_path_score(): metric = {}, raw_value = {}, score_unweighted = {}, score_weighted = {}, weight = {}'.format(
@@ -321,7 +325,38 @@ class ShortestForwarding(app_manager.RyuApp):
         self.logger.info(
             'get_path_score(): total_score = {}'.format(total_score))
 
-        return total_score
+        return total_score, metric_raw_values
+    
+    def weight_model_all_get_path(self, src, dst, src_ip, dst_ip, weights: Dict[str, float]):
+        shortest_paths = self.awareness.shortest_paths
+        graph = self.awareness.graph
+
+        try:
+            shortest_paths[src][dst][0]
+        except:
+            paths = self.awareness.k_shortest_paths(graph, src, dst,
+                                                    weight='weight', k=CONF.k_paths)
+
+            shortest_paths.setdefault(src, {})
+            shortest_paths[src][dst] = paths
+
+        self.logger.info('shortest paths are ' + str(shortest_paths))
+
+        local_shortest_paths = shortest_paths[src][dst]
+        self.logger.info('src = {}, dst = {}'.format(src, dst))
+        best_path = None
+        best_path_score = float('-inf')
+        best_path_metric_values = {}
+        for path in local_shortest_paths:
+            logging.info('PATH: {}'.format(path))
+            score, best_path_metric_values = self.get_path_score(
+                graph, src_ip, dst_ip, path, weights, self.switch_weights, self.enabled_metrics)
+            if score > best_path_score:
+                best_path_score = score
+                best_path = path
+        
+        return best_path, best_path_metric_values
+
 
     def get_path(self, src, dst, src_ip, dst_ip, weight):
         """
@@ -365,29 +400,7 @@ class ShortestForwarding(app_manager.RyuApp):
             weights = self.get_metric_weights_for_connection(
                 self.services, self.default_metric_weights, src_ip, dst_ip)
 
-            try:
-                shortest_paths[src][dst][0]
-            except:
-                paths = self.awareness.k_shortest_paths(graph, src, dst,
-                                                        weight='weight', k=CONF.k_paths)
-
-                shortest_paths.setdefault(src, {})
-                shortest_paths[src][dst] = paths
-
-            self.logger.info('shortest paths are ' + str(shortest_paths))
-
-            local_shortest_paths = shortest_paths[src][dst]
-            self.logger.info('src = {}, dst = {}'.format(src, dst))
-            best_path = None
-            best_path_score = float('-inf')
-            for path in local_shortest_paths:
-                logging.info('PATH: {}'.format(path))
-                score = self.get_path_score(
-                    graph, src_ip, dst_ip, path, weights, self.switch_weights, self.enabled_metrics)
-                if score > best_path_score:
-                    best_path_score = score
-                    best_path = path
-            return best_path
+            return self.weight_model_all_get_path(src, dst, src_ip, dst_ip, weights)[0]
 
     def get_sw(self, dpid, in_port, src, dst):
         """
@@ -490,7 +503,8 @@ class ShortestForwarding(app_manager.RyuApp):
             src_sw, dst_sw = result[0], result[1]
             if dst_sw:
                 # Path has already calculated, just get it.
-                path = self.get_path(src_sw, dst_sw, ip_src, ip_dst, weight=self.weight)
+                path = self.get_path(src_sw, dst_sw, ip_src,
+                                     ip_dst, weight=self.weight)
                 self.logger.info("[PATH]%s<-->%s: %s" % (ip_src, ip_dst, path))
                 self.active_paths.setdefault(ip_src, {})
                 self.active_paths[ip_src][ip_dst] = (path, time.time())

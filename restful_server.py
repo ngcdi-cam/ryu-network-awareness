@@ -3,7 +3,7 @@ from ryu.base import app_manager
 import json
 import networkx
 import traceback
-
+from collections import OrderedDict
 
 def bad_request_response(e: Exception):
     print("Bad request: " + str(e))
@@ -144,6 +144,85 @@ class NetworkAwarenessRestfulController(ControllerBase):
             )
         })
         return Response(content_type='application/json', body=body)
+    
+    @route(app_name, '/awareness/path_info', methods=['POST'])
+    def get_path_stats(self, req, **kwargs):
+        req_obj = req.json
+
+        weights = req_obj.get('weights', self.shortest_forwarding.default_metric_weights)
+        assert type(weights) is dict
+        for k, v in weights.items():
+            assert type(k) is str
+            assert type(v) is float
+        
+        stats = []
+        src_dst_pairs = req_obj.get('src_dst_pairs')
+        assert type(src_dst_pairs) is list
+        
+        for pair in src_dst_pairs:
+            assert type(pair) is dict
+            src = pair.get('src')
+            assert type(src) is int
+            dst = pair.get('dst')
+            assert type(dst) is int
+            src_ip = pair.get('src_ip')
+            assert type(src_ip) is str
+            dst_ip = pair.get('dst_ip')
+            assert type(dst_ip) is str
+
+            path, metric_values = self.shortest_forwarding.weight_model_all_get_path(src, dst, src_ip, dst_ip, weights)
+            stats.append({
+                'src': src,
+                'dst': dst,
+                'src_ip': src_ip,
+                'dst_ip': dst_ip,
+                'path': path,
+                'metrics': metric_values
+            })
+        
+        body = json.dumps({
+            'stats': stats,
+            'switch_weights': self.shortest_forwarding.switch_weights
+        })
+        return Response(content_type='application/json', body=body)
+
+    @route(app_name, '/awareness/access_table_entry_pinnings', methods=['PATCH'])
+    def set_access_table_entry_pinnings(self, req, **kwargs):
+        access_table = self.awareness.access_table
+        # access_table = OrderedDict()
+        pinnings = req.json.get('pinnings')
+        assert type(pinnings) is list
+        for pinning in pinnings:
+            assert type(pinning) is dict
+            t_ip = pinning.get('ip')
+            assert type(t_ip) is str
+            t_dpid = pinning.get('dpid')
+            assert type(t_dpid) is int
+            t_port = pinning.get('port')
+            assert type(t_port) is int
+
+            t_mac = None
+            for (dpid, port), (ip, mac) in access_table.items():
+                if ip == t_ip:
+                    t_mac = mac
+                    break
+
+            assert t_mac is not None
+            access_table[(t_dpid, t_port)] = (t_ip, t_mac)
+            access_table.move_to_end((t_dpid, t_port), False)
+        return success_response()
+
+    @route(app_name, '/awareness/access_ports', methods=['GET'])
+    def get_access_port(self, req, **kwargs):
+        a = {}
+
+        for k, v in self.awareness.access_ports.items():
+            a[k] = list(v)
+        
+        body = json.dumps({
+            'access_ports': a
+        })
+        return Response(content_type='application/json', body=body)
 
     @route(app_name, '/awareness/access_table', methods=['GET'])
     def get_access_table(self, req, **kwargs):
@@ -154,11 +233,9 @@ class NetworkAwarenessRestfulController(ControllerBase):
             )
         )
         access_table_filtered = []
-        ip_visited = set()
         for t in access_table:
-            if t['host_ip'] not in ip_visited:
+            if t['port'] in self.awareness.access_ports.get(t['dpid']):
                 access_table_filtered.append(t)
-                ip_visited.add(t['host_ip'])
         
         body = json.dumps({
             'access_table': access_table_filtered

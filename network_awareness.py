@@ -37,6 +37,7 @@ from ryu.topology import event, switches
 from ryu.topology.api import get_switch, get_link
 from . import setting
 
+from collections import OrderedDict
 
 CONF = cfg.CONF
 
@@ -56,7 +57,8 @@ class NetworkAwareness(app_manager.RyuApp):
         self.topology_api_app = self
         self.name = "awareness"
         self.link_to_port = {}       # (src_dpid,dst_dpid)->(src_port,dst_port)
-        self.access_table = {}       # {(sw,port) :[host1_ip]}
+        # self.access_table = {}       # {(sw,port) :[host1_ip]}
+        self.access_table = OrderedDict()
         self.switch_port_table = {}  # dpip->port_num
         self.access_ports = {}       # dpid->port_num
         self.interior_ports = {}     # dpid->port_num
