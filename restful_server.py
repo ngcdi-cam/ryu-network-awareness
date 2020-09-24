@@ -170,14 +170,15 @@ class NetworkAwarenessRestfulController(ControllerBase):
             dst_ip = pair.get('dst_ip')
             assert type(dst_ip) is str
 
-            path, metric_values = self.shortest_forwarding.weight_model_all_get_path(src, dst, src_ip, dst_ip, weights)
+            path, metric_values, score = self.shortest_forwarding.weight_model_all_get_path(src, dst, src_ip, dst_ip, weights)
             stats.append({
                 'src': src,
                 'dst': dst,
                 'src_ip': src_ip,
                 'dst_ip': dst_ip,
                 'path': path,
-                'metrics': metric_values
+                'metrics': metric_values,
+                'score': score
             })
         
         body = json.dumps({

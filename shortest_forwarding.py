@@ -355,7 +355,7 @@ class ShortestForwarding(app_manager.RyuApp):
                 best_path_score = score
                 best_path = path
         
-        return best_path, best_path_metric_values
+        return best_path, best_path_metric_values, best_path_score
 
 
     def get_path(self, src, dst, src_ip, dst_ip, weight):
