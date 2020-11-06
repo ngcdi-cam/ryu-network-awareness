@@ -116,7 +116,8 @@ class NetworkMonitor(app_manager.RyuApp):
         while CONF.weight == 'bw' or CONF.weight == 'all':
             self.graph = self.create_bw_graph(self.free_bandwidth)
             self.logger.debug("save_freebandwidth")
-            hub.sleep(setting.MONITOR_PERIOD)
+            #hub.sleep(setting.MONITOR_PERIOD)
+            hub.sleep(10)
 
     def _request_stats(self, datapath):
         """
@@ -323,7 +324,8 @@ class NetworkMonitor(app_manager.RyuApp):
 
             # Get flow's speed.
             pre = 0
-            period = setting.MONITOR_PERIOD
+            #period = setting.MONITOR_PERIOD
+            period = 10
             tmp = self.flow_stats[dpid][key]
             if len(tmp) > 1:
                 pre = tmp[-2][1]
@@ -357,7 +359,8 @@ class NetworkMonitor(app_manager.RyuApp):
 
                 # Get port speed.
                 pre = 0
-                period = setting.MONITOR_PERIOD
+                #period = setting.MONITOR_PERIOD
+                period = 10
                 tmp = self.port_stats[key]
                 if len(tmp) > 1:
                     pre = tmp[-2][0] + tmp[-2][1]
