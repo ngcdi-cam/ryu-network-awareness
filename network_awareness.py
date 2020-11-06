@@ -62,7 +62,6 @@ class NetworkAwareness(app_manager.RyuApp):
         self.switch_port_table = {}  # dpip->port_num
         self.access_ports = {}       # dpid->port_num
         self.interior_ports = {}     # dpid->port_num
-
         self.graph = nx.DiGraph()
         self.pre_graph = nx.DiGraph()
         self.pre_access_table = {}
@@ -71,16 +70,15 @@ class NetworkAwareness(app_manager.RyuApp):
 
         # Start a green thread to discover network resource.
         self.discover_thread = hub.spawn(self._discover)
-
     def _discover(self):
-        i = 0
+        #i = 1
         while True:
             self.show_topology()
-            if i == 5:
-                self.get_topology(None)
-                i = 0
+        #    if i == 2: # Why 5?
+            self.get_topology(None)
+           #     i = 1
             hub.sleep(setting.DISCOVERY_PERIOD)
-            i = i + 1
+            #i = i + 1
 
     @set_ev_cls(ofp_event.EventOFPSwitchFeatures, CONFIG_DISPATCHER)
     def switch_features_handler(self, ev):
@@ -225,15 +223,22 @@ class NetworkAwareness(app_manager.RyuApp):
         """
             Get topology info and calculate shortest paths.
         """
-        switch_list = get_switch(self.topology_api_app, None)
-        self.create_port_map(switch_list)
-        self.switches = list(self.switch_port_table.keys())
-        links = get_link(self.topology_api_app, None)
-        self.create_interior_links(links)
-        self.create_access_ports()
-        self.get_graph(list(self.link_to_port.keys()))
-        self.shortest_paths = self.all_k_shortest_paths(
-            self.graph, weight='weight', k=CONF.k_paths)
+        # only refresh periodically and not everytime there is an event in the switches
+        # temporary fix to avoid overloading the controller
+        if(ev==None): 
+            switch_list = get_switch(self.topology_api_app, None)
+            self.create_port_map(switch_list)
+            self.switches = list(self.switch_port_table.keys())
+            links = get_link(self.topology_api_app, None)
+            #self.logger.info("FOUND LINKS RYU====>"+str(len(links))+"<===")
+            #[self.logger.info("LINKS RYU====>"+str(link.to_dict())+"<====") for link in links]
+        
+        #if(ev==None):
+            self.create_interior_links(links)
+            self.create_access_ports()
+            self.get_graph(list(self.link_to_port.keys()))
+            self.shortest_paths = self.all_k_shortest_paths(
+                self.graph, weight='weight', k=CONF.k_paths)
 
     def register_access_info(self, dpid, in_port, ip, mac):
         """
