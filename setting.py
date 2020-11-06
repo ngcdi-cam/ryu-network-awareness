@@ -2,9 +2,10 @@
 
 import os
 
-DISCOVERY_PERIOD = 10   			# For discovering topology.
+DISCOVERY_PERIOD = 50   			# For discovering topology.
 
-MONITOR_PERIOD = 5					# For monitoring traffic
+# initial value was 5 for small networks
+MONITOR_PERIOD = 20					# For monitoring traffic
 
 DELAY_DETECTING_PERIOD = 5			# For detecting link delay.
 
